@@ -8,7 +8,7 @@ NAUKRI_PASSWORD = "your_password"
 
 # Update Schedule (in hours, 24-hour format)
 # The app will update your profile at these times daily
-UPDATE_INTERVALS = [9, 12, 15, 18, 21]  # 9 AM, 12 PM, 3 PM, 6 PM, 9 PM
+UPDATE_INTERVALS = ["07:00", "08:00", "08:30", "08:45", "09:00"]  # 7 AM, 8 AM, 8:30 AM, 8:45 AM, 9 AM
 
 # Profile Update Options
 UPDATE_RESUME = True  # Re-upload resume (increases visibility significantly)

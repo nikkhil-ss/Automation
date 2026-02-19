@@ -15,12 +15,21 @@ import schedule
 import config
 from naukri_updater import run_update_with_retry
 
+# Config defaults (in case config.py is incomplete)
+LOG_LEVEL = getattr(config, 'LOG_LEVEL', 'INFO')
+LOG_FILE = getattr(config, 'LOG_FILE', 'naukri_update.log')
+UPDATE_INTERVALS = getattr(config, 'UPDATE_INTERVALS', ["07:00", "08:00", "08:30", "08:45", "09:00"])
+UPDATE_RESUME = getattr(config, 'UPDATE_RESUME', True)
+UPDATE_HEADLINE = getattr(config, 'UPDATE_HEADLINE', False)
+HEADLESS = getattr(config, 'HEADLESS', True)
+MAX_RETRIES = getattr(config, 'MAX_RETRIES', 3)
+
 # Setup logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, LOG_LEVEL),
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(config.LOG_FILE),
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -62,12 +71,16 @@ def setup_schedule():
     """Setup the schedule based on configured intervals."""
     logger.info("Setting up update schedule...")
     
-    for hour in config.UPDATE_INTERVALS:
-        schedule_time = f"{hour:02d}:00"
-        schedule.every().day.at(schedule_time).do(job)
-        logger.info(f"Scheduled update at {schedule_time}")
+    for schedule_time in UPDATE_INTERVALS:
+        # Handle both string times ("08:30") and integer hours (8)
+        if isinstance(schedule_time, int):
+            time_str = f"{schedule_time:02d}:00"
+        else:
+            time_str = schedule_time
+        schedule.every().day.at(time_str).do(job)
+        logger.info(f"Scheduled update at {time_str}")
     
-    logger.info(f"Total {len(config.UPDATE_INTERVALS)} updates scheduled per day")
+    logger.info(f"Total {len(UPDATE_INTERVALS)} updates scheduled per day")
 
 
 def run_scheduler():
@@ -118,18 +131,27 @@ def run_once():
 def calculate_next_run_time():
     """Calculate and display when the next update will occur."""
     now = datetime.now()
-    current_hour = now.hour
+    current_time = now.hour * 60 + now.minute  # Current time in minutes
     
-    # Find next scheduled hour
-    future_hours = [h for h in config.UPDATE_INTERVALS if h > current_hour]
+    # Parse schedule times and find next one
+    schedule_times = []
+    for t in UPDATE_INTERVALS:
+        if isinstance(t, int):
+            schedule_times.append((t, 0))  # (hour, minute)
+        else:
+            parts = t.split(":")
+            schedule_times.append((int(parts[0]), int(parts[1])))
     
-    if future_hours:
-        next_hour = future_hours[0]
-        next_run = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+    # Find next scheduled time
+    future_times = [(h, m) for h, m in schedule_times if h * 60 + m > current_time]
+    
+    if future_times:
+        next_h, next_m = future_times[0]
+        next_run = now.replace(hour=next_h, minute=next_m, second=0, microsecond=0)
     else:
         # Next day's first scheduled time
-        next_hour = config.UPDATE_INTERVALS[0]
-        next_run = now.replace(hour=next_hour, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        next_h, next_m = schedule_times[0]
+        next_run = now.replace(hour=next_h, minute=next_m, second=0, microsecond=0) + timedelta(days=1)
     
     time_until = next_run - now
     return next_run, time_until
@@ -141,17 +163,17 @@ def print_status():
     print("NAUKRI AUTO UPDATER - STATUS")
     print("=" * 50)
     print(f"Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Scheduled Hours: {config.UPDATE_INTERVALS}")
+    print(f"Scheduled Hours: {UPDATE_INTERVALS}")
     
     next_run, time_until = calculate_next_run_time()
     print(f"Next Update: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Time Until Next: {time_until}")
     
     print("\nConfiguration:")
-    print(f"  - Resume Update: {config.UPDATE_RESUME}")
-    print(f"  - Headline Update: {config.UPDATE_HEADLINE}")
-    print(f"  - Headless Mode: {config.HEADLESS}")
-    print(f"  - Max Retries: {config.MAX_RETRIES}")
+    print(f"  - Resume Update: {UPDATE_RESUME}")
+    print(f"  - Headline Update: {UPDATE_HEADLINE}")
+    print(f"  - Headless Mode: {HEADLESS}")
+    print(f"  - Max Retries: {MAX_RETRIES}")
     print("=" * 50 + "\n")
 
 

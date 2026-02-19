@@ -15,48 +15,37 @@ echo "============================================"
 echo ""
 
 # Update package lists
-echo "[1/8] Updating package lists..."
+echo "[1/6] Updating package lists..."
 pkg update -y
 
 # Upgrade existing packages
-echo "[2/8] Upgrading existing packages..."
+echo "[2/6] Upgrading existing packages..."
 pkg upgrade -y
 
 # Install required packages
-echo "[3/8] Installing required packages..."
-pkg install -y python chromium wget git cronie termux-services
+echo "[3/6] Installing required packages..."
+pkg install -y python git cronie termux-services
 
 # Install pip if not available
-echo "[4/8] Setting up pip..."
+echo "[4/6] Setting up pip..."
 pip install --upgrade pip
 
 # Install Python dependencies
-echo "[5/8] Installing Python dependencies..."
-pip install selenium schedule
-
-# Setup Chrome/Chromium driver
-echo "[6/8] Setting up ChromeDriver..."
-
-# Get Chromium version
-CHROME_VERSION=$(chromium --version | grep -oP '\d+' | head -1)
-echo "Detected Chromium version: $CHROME_VERSION"
-
-# Download ChromeDriver (compatible version)
-# Note: ChromeDriver for Termux needs to be compiled or use alternative
-pip install chromedriver-autoinstaller
+echo "[5/6] Installing Python dependencies..."
+pip install requests schedule
 
 # Create necessary directories
-echo "[7/8] Creating directories..."
+echo "[6/6] Creating directories..."
 mkdir -p ~/naukri_auto_update
 mkdir -p ~/naukri_auto_update/logs
 
 # Setup cron for scheduling
-echo "[8/8] Setting up cron service..."
+echo "Setting up cron service..."
 sv-enable crond 2>/dev/null || true
 
 echo ""
 echo "============================================"
-echo "Basic setup complete!"
+echo "Setup complete!"
 echo "============================================"
 echo ""
 echo "NEXT STEPS:"

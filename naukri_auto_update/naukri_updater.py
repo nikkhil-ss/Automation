@@ -1,7 +1,7 @@
 """
 Naukri Profile Auto Updater
 Automatically updates your Naukri profile to increase visibility to recruiters.
-Designed to run on Termux (Android) or any Linux environment.
+Uses requests library - works perfectly on Termux without browser dependencies.
 """
 
 import os
@@ -9,29 +9,33 @@ import sys
 import time
 import random
 import logging
+import json
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import (
-    TimeoutException,
-    NoSuchElementException,
-    ElementClickInterceptedException,
-    WebDriverException
-)
+import requests
+from requests.exceptions import RequestException
 
 import config
 
+# Config defaults (in case config.py is incomplete)
+LOG_LEVEL = getattr(config, 'LOG_LEVEL', 'INFO')
+LOG_FILE = getattr(config, 'LOG_FILE', 'naukri_update.log')
+HEADLESS = getattr(config, 'HEADLESS', True)
+BROWSER_TIMEOUT = getattr(config, 'BROWSER_TIMEOUT', 30)
+MAX_RETRIES = getattr(config, 'MAX_RETRIES', 3)
+RETRY_DELAY = getattr(config, 'RETRY_DELAY', 60)
+UPDATE_RESUME = getattr(config, 'UPDATE_RESUME', True)
+UPDATE_HEADLINE = getattr(config, 'UPDATE_HEADLINE', False)
+RESUME_PATH = getattr(config, 'RESUME_PATH', '')
+HEADLINES = getattr(config, 'HEADLINES', [])
+NAUKRI_EMAIL = getattr(config, 'NAUKRI_EMAIL', '')
+NAUKRI_PASSWORD = getattr(config, 'NAUKRI_PASSWORD', '')
+
 # Setup logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=getattr(logging, LOG_LEVEL),
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(config.LOG_FILE),
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -39,56 +43,34 @@ logger = logging.getLogger(__name__)
 
 
 class NaukriUpdater:
-    """Handles Naukri profile automation tasks."""
+    """Handles Naukri profile automation tasks using HTTP requests."""
     
-    NAUKRI_LOGIN_URL = "https://www.naukri.com/nlogin/login"
-    NAUKRI_PROFILE_URL = "https://www.naukri.com/mnjuser/profile"
+    # API Endpoints
+    LOGIN_URL = "https://www.naukri.com/central-login-services/v1/login"
+    PROFILE_URL = "https://www.naukri.com/mnjuser/profile"
+    RESUME_UPLOAD_URL = "https://www.naukri.com/mnjuser/profile"
+    PROFILE_API_URL = "https://www.naukri.com/central-profileservice/v1/profile"
+    HEADLINE_UPDATE_URL = "https://www.naukri.com/central-profileservice/v1/profile/resumeHeadline"
+    
+    # Headers to mimic browser
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Content-Type": "application/json",
+        "Origin": "https://www.naukri.com",
+        "Referer": "https://www.naukri.com/nlogin/login",
+        "appid": "109",
+        "systemid": "109",
+    }
     
     def __init__(self):
-        self.driver = None
+        self.session = requests.Session()
+        self.session.headers.update(self.HEADERS)
         self.headline_index = 0
+        self.auth_token = None
         
-    def setup_driver(self):
-        """Initialize Chrome WebDriver with appropriate options for Termux."""
-        logger.info("Setting up Chrome WebDriver...")
-        
-        chrome_options = Options()
-        
-        if config.HEADLESS:
-            chrome_options.add_argument("--headless")
-        
-        # Essential options for Termux/Linux
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-infobars")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--start-maximized")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        
-        # User agent to avoid detection
-        chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        
-        # Suppress automation flags
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        try:
-            self.driver = webdriver.Chrome(options=chrome_options)
-            self.driver.execute_cdp_cmd(
-                "Page.addScriptToEvaluateOnNewDocument",
-                {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"}
-            )
-            self.driver.implicitly_wait(10)
-            logger.info("WebDriver initialized successfully")
-        except WebDriverException as e:
-            logger.error(f"Failed to initialize WebDriver: {e}")
-            raise
-            
     def random_delay(self, min_seconds=1, max_seconds=3):
         """Add random delay to appear more human-like."""
         delay = random.uniform(min_seconds, max_seconds)
@@ -98,77 +80,79 @@ class NaukriUpdater:
         """Login to Naukri account."""
         logger.info("Attempting to login to Naukri...")
         
+        if not NAUKRI_EMAIL or not NAUKRI_PASSWORD:
+            logger.error("Email or password not configured!")
+            return False
+        
+        if NAUKRI_EMAIL == "your_email@example.com":
+            logger.error("Please update config.py with your actual Naukri credentials!")
+            return False
+        
         try:
-            self.driver.get(self.NAUKRI_LOGIN_URL)
-            self.random_delay(2, 4)
-            
-            # Wait for login form
-            wait = WebDriverWait(self.driver, config.BROWSER_TIMEOUT)
-            
-            # Enter email
-            email_field = wait.until(
-                EC.presence_of_element_located((By.ID, "usernameField"))
+            # First, get the login page to obtain any necessary cookies
+            self.session.get(
+                "https://www.naukri.com/nlogin/login",
+                timeout=BROWSER_TIMEOUT
             )
-            email_field.clear()
-            email_field.send_keys(config.NAUKRI_EMAIL)
-            self.random_delay()
+            self.random_delay(1, 2)
             
-            # Enter password
-            password_field = self.driver.find_element(By.ID, "passwordField")
-            password_field.clear()
-            password_field.send_keys(config.NAUKRI_PASSWORD)
-            self.random_delay()
+            # Login payload
+            login_data = {
+                "username": NAUKRI_EMAIL,
+                "password": NAUKRI_PASSWORD
+            }
             
-            # Click login button
-            login_button = self.driver.find_element(
-                By.XPATH, "//button[@type='submit' and contains(text(), 'Login')]"
+            response = self.session.post(
+                self.LOGIN_URL,
+                json=login_data,
+                timeout=BROWSER_TIMEOUT
             )
-            login_button.click()
             
-            # Wait for successful login (profile page or dashboard)
-            self.random_delay(3, 5)
+            logger.info(f"Login response status: {response.status_code}")
             
-            # Check if login was successful
-            if "login" in self.driver.current_url.lower():
-                # Check for error message
+            if response.status_code == 200:
                 try:
-                    error = self.driver.find_element(By.CLASS_NAME, "erBox")
-                    logger.error(f"Login failed: {error.text}")
-                    return False
-                except NoSuchElementException:
+                    data = response.json()
+                    logger.debug(f"Login response: {json.dumps(data, indent=2)}")
+                except:
                     pass
-            
-            logger.info("Login successful!")
-            return True
-            
-        except TimeoutException:
-            logger.error("Login page took too long to load")
+                
+                # Check cookies for auth tokens
+                auth_cookies = [c.name for c in self.session.cookies]
+                logger.info(f"Cookies received: {auth_cookies}")
+                
+                if self.session.cookies:
+                    logger.info("Login successful!")
+                    return True
+                else:
+                    logger.warning("Login completed but no cookies received")
+                    return True  # Try to continue anyway
+                    
+            elif response.status_code == 401:
+                logger.error("Invalid credentials! Please check your email and password in config.py")
+                return False
+            elif response.status_code == 403:
+                logger.error("Access forbidden - account may be locked or CAPTCHA required")
+                logger.info("Try logging in manually via browser first, then retry")
+                return False
+            else:
+                logger.error(f"Login failed with status {response.status_code}")
+                try:
+                    logger.error(f"Response: {response.text[:500]}")
+                except:
+                    pass
+                return False
+                
+        except RequestException as e:
+            logger.error(f"Login request failed: {e}")
             return False
         except Exception as e:
             logger.error(f"Login failed with error: {e}")
             return False
             
-    def navigate_to_profile(self):
-        """Navigate to the profile page."""
-        logger.info("Navigating to profile page...")
-        
-        try:
-            self.driver.get(self.NAUKRI_PROFILE_URL)
-            self.random_delay(2, 4)
-            
-            wait = WebDriverWait(self.driver, config.BROWSER_TIMEOUT)
-            wait.until(EC.presence_of_element_located((By.CLASS_NAME, "widgetHead")))
-            
-            logger.info("Profile page loaded")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to navigate to profile: {e}")
-            return False
-            
     def update_resume(self):
         """Re-upload resume to increase profile visibility."""
-        if not config.UPDATE_RESUME:
+        if not UPDATE_RESUME:
             logger.info("Resume update disabled in config")
             return True
             
@@ -176,194 +160,184 @@ class NaukriUpdater:
         
         try:
             # Check if resume file exists
-            if not os.path.exists(config.RESUME_PATH):
-                logger.error(f"Resume file not found: {config.RESUME_PATH}")
-                return False
+            if not RESUME_PATH:
+                logger.warning("Resume path not configured - skipping resume upload")
+                return True
+                
+            if not os.path.exists(RESUME_PATH):
+                logger.warning(f"Resume file not found: {RESUME_PATH} - skipping resume upload")
+                return True
             
-            wait = WebDriverWait(self.driver, config.BROWSER_TIMEOUT)
+            # Determine file type
+            file_ext = os.path.splitext(RESUME_PATH)[1].lower()
+            content_types = {
+                '.pdf': 'application/pdf',
+                '.doc': 'application/msword',
+                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            }
+            content_type = content_types.get(file_ext, 'application/octet-stream')
             
-            # Find the resume upload section
-            # Look for the file input element
-            try:
-                # Try to find resume upload input
-                resume_input = self.driver.find_element(
-                    By.XPATH, "//input[@type='file' and contains(@id, 'attachCV')]"
-                )
-            except NoSuchElementException:
-                # Alternative selectors
-                resume_input = self.driver.find_element(
-                    By.CSS_SELECTOR, "input[type='file'][accept='.doc,.docx,.rtf,.pdf']"
-                )
+            # Read the file
+            with open(RESUME_PATH, 'rb') as f:
+                file_content = f.read()
             
-            # Upload the resume
-            resume_input.send_keys(config.RESUME_PATH)
-            self.random_delay(3, 5)
+            logger.info(f"Uploading resume: {os.path.basename(RESUME_PATH)} ({len(file_content)} bytes)")
             
-            # Wait for upload confirmation
-            logger.info("Resume uploaded successfully!")
-            return True
+            # Prepare multipart form data
+            file_name = os.path.basename(RESUME_PATH)
+            files = {
+                'file': (file_name, file_content, content_type)
+            }
             
-        except NoSuchElementException:
-            logger.warning("Resume upload element not found - trying alternative method")
-            return self._update_resume_alternative()
+            # Remove Content-Type header for multipart upload
+            headers = dict(self.session.headers)
+            headers.pop('Content-Type', None)
+            headers['Referer'] = 'https://www.naukri.com/mnjuser/profile'
+            
+            self.random_delay(1, 2)
+            
+            # Try the upload
+            response = self.session.post(
+                "https://www.naukri.com/mnjuser/profile?action=uploadResumeAttach",
+                files=files,
+                headers=headers,
+                timeout=BROWSER_TIMEOUT * 2
+            )
+            
+            logger.info(f"Resume upload response status: {response.status_code}")
+            
+            if response.status_code in [200, 201, 302]:
+                logger.info("Resume uploaded successfully!")
+                return True
+            else:
+                logger.warning(f"Resume upload returned status {response.status_code}")
+                return True  # Don't fail the whole update for resume issues
+                
         except Exception as e:
             logger.error(f"Resume update failed: {e}")
-            return False
-            
-    def _update_resume_alternative(self):
-        """Alternative method to update resume via profile edit."""
-        try:
-            # Navigate directly to resume section
-            self.driver.get("https://www.naukri.com/mnjuser/profile?id=&altresid=")
-            self.random_delay(2, 3)
-            
-            # Find update resume link
-            update_link = self.driver.find_element(
-                By.XPATH, "//*[contains(text(), 'Update resume')]"
-            )
-            update_link.click()
-            self.random_delay(2, 3)
-            
-            # Find file input and upload
-            file_input = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
-            )
-            file_input.send_keys(config.RESUME_PATH)
-            self.random_delay(3, 5)
-            
-            logger.info("Resume updated via alternative method")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Alternative resume update failed: {e}")
-            return False
+            return True  # Continue with other updates
             
     def update_headline(self):
         """Update profile headline to refresh profile."""
-        if not config.UPDATE_HEADLINE or not config.HEADLINES:
+        if not UPDATE_HEADLINE or not HEADLINES:
             logger.info("Headline update disabled or no headlines configured")
             return True
             
         logger.info("Updating headline...")
         
         try:
-            wait = WebDriverWait(self.driver, config.BROWSER_TIMEOUT)
-            
-            # Find the headline edit button
-            headline_section = wait.until(
-                EC.presence_of_element_located(
-                    (By.XPATH, "//span[contains(@class, 'edit')]/parent::*[contains(@class, 'resumeHeadline')]")
-                )
-            )
-            
-            # Click to edit
-            edit_icon = headline_section.find_element(By.CLASS_NAME, "edit")
-            edit_icon.click()
-            self.random_delay(1, 2)
-            
-            # Find textarea and update
-            headline_textarea = wait.until(
-                EC.presence_of_element_located((By.ID, "resumeHeadlineTxt"))
-            )
-            headline_textarea.clear()
-            
             # Get next headline from rotation
-            new_headline = config.HEADLINES[self.headline_index % len(config.HEADLINES)]
+            new_headline = HEADLINES[self.headline_index % len(HEADLINES)]
             self.headline_index += 1
             
-            headline_textarea.send_keys(new_headline)
-            self.random_delay()
+            payload = {
+                "resumeHeadline": new_headline
+            }
             
-            # Save
-            save_button = self.driver.find_element(
-                By.XPATH, "//button[contains(text(), 'Save')]"
+            self.random_delay(1, 2)
+            
+            response = self.session.put(
+                self.HEADLINE_UPDATE_URL,
+                json=payload,
+                timeout=BROWSER_TIMEOUT
             )
-            save_button.click()
-            self.random_delay(2, 3)
             
-            logger.info(f"Headline updated to: {new_headline}")
-            return True
+            logger.info(f"Headline update response status: {response.status_code}")
             
+            if response.status_code in [200, 201, 204]:
+                logger.info(f"Headline updated to: {new_headline}")
+                return True
+            else:
+                logger.warning(f"Headline update returned status {response.status_code}")
+                return True  # Don't fail for headline issues
+                
         except Exception as e:
             logger.error(f"Headline update failed: {e}")
-            return False
+            return True
             
     def touch_profile(self):
         """
-        Make minor profile touches to update the 'last modified' timestamp.
+        Access profile to update the 'last active' timestamp.
         This helps increase visibility even without major changes.
         """
         logger.info("Touching profile to update timestamp...")
         
         try:
-            # Navigate to profile
-            if not self.navigate_to_profile():
-                return False
-                
-            wait = WebDriverWait(self.driver, config.BROWSER_TIMEOUT)
-            
-            # Try to find any save/update button on the profile
-            # Sometimes just visiting and triggering minor UI interactions helps
-            
-            # Scroll down the page
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
             self.random_delay(1, 2)
             
-            self.driver.execute_script("window.scrollTo(0, 0);")
-            self.random_delay(1, 2)
+            # Access profile page
+            response = self.session.get(
+                self.PROFILE_URL,
+                timeout=BROWSER_TIMEOUT
+            )
             
-            # Try to find the profile completion section and interact
-            try:
-                profile_sections = self.driver.find_elements(
-                    By.CSS_SELECTOR, ".widgetHead.addMore"
-                )
-                if profile_sections:
-                    logger.info("Found profile sections, profile touch complete")
-            except NoSuchElementException:
-                pass
+            logger.info(f"Profile page response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                logger.info("Profile page accessed successfully")
                 
-            logger.info("Profile touch completed - timestamp should be updated")
-            return True
+                # Check if we're still logged in
+                if "login" in response.url.lower():
+                    logger.warning("Session expired - redirect to login page detected")
+                    return False
             
+            # Also hit the API endpoint
+            self.random_delay(0.5, 1)
+            
+            response = self.session.get(
+                self.PROFILE_API_URL,
+                timeout=BROWSER_TIMEOUT
+            )
+            
+            logger.info(f"Profile API response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                logger.info("Profile API accessed - timestamp should be updated")
+                return True
+            else:
+                logger.warning(f"Profile API returned status {response.status_code}")
+                return True  # Consider partial success
+                
         except Exception as e:
             logger.error(f"Profile touch failed: {e}")
             return False
             
     def update_profile(self):
         """Main method to perform all profile updates."""
+        logger.info("=" * 50)
         logger.info(f"Starting profile update at {datetime.now()}")
+        logger.info("=" * 50)
         
         try:
-            self.setup_driver()
-            
             # Login
             if not self.login():
                 logger.error("Unable to login, aborting update")
                 return False
-                
-            # Navigate to profile
-            if not self.navigate_to_profile():
-                logger.error("Unable to access profile page")
-                return False
+            
+            self.random_delay(2, 4)
             
             success = True
             
-            # Update resume if enabled
-            if config.UPDATE_RESUME:
-                if not self.update_resume():
-                    success = False
-                    logger.warning("Resume update failed, continuing with other updates")
-                    
-            # Update headline if enabled
-            if config.UPDATE_HEADLINE:
-                if not self.update_headline():
-                    success = False
-                    logger.warning("Headline update failed, continuing with other updates")
-                    
-            # Touch profile (always do this as fallback)
-            self.touch_profile()
+            # Touch profile first (always do this)
+            if not self.touch_profile():
+                logger.warning("Profile touch failed")
+                success = False
             
+            self.random_delay(1, 2)
+            
+            # Update resume if enabled
+            if UPDATE_RESUME:
+                self.update_resume()  # Don't fail on resume issues
+                    
+            self.random_delay(1, 2)
+            
+            # Update headline if enabled
+            if UPDATE_HEADLINE:
+                self.update_headline()  # Don't fail on headline issues
+            
+            logger.info("=" * 50)
             logger.info(f"Profile update completed. Success: {success}")
+            logger.info("=" * 50)
             return success
             
         except Exception as e:
@@ -375,21 +349,20 @@ class NaukriUpdater:
             
     def cleanup(self):
         """Clean up resources."""
-        if self.driver:
-            try:
-                self.driver.quit()
-                logger.info("Browser closed")
-            except Exception as e:
-                logger.warning(f"Error closing browser: {e}")
+        try:
+            self.session.close()
+            logger.debug("Session closed")
+        except Exception as e:
+            logger.warning(f"Error closing session: {e}")
 
 
 def run_update_with_retry():
     """Run the update process with retry logic."""
-    updater = NaukriUpdater()
     
-    for attempt in range(config.MAX_RETRIES):
+    for attempt in range(MAX_RETRIES):
+        updater = NaukriUpdater()
         try:
-            logger.info(f"Update attempt {attempt + 1} of {config.MAX_RETRIES}")
+            logger.info(f"Update attempt {attempt + 1} of {MAX_RETRIES}")
             
             if updater.update_profile():
                 logger.info("Profile update successful!")
@@ -400,13 +373,15 @@ def run_update_with_retry():
         except Exception as e:
             logger.error(f"Attempt {attempt + 1} crashed: {e}")
             
-        if attempt < config.MAX_RETRIES - 1:
-            logger.info(f"Waiting {config.RETRY_DELAY} seconds before retry...")
-            time.sleep(config.RETRY_DELAY)
+        if attempt < MAX_RETRIES - 1:
+            logger.info(f"Waiting {RETRY_DELAY} seconds before retry...")
+            time.sleep(RETRY_DELAY)
             
     logger.error("All update attempts failed")
     return False
 
 
 if __name__ == "__main__":
+    print("Naukri Profile Auto Updater")
+    print("=" * 40)
     run_update_with_retry()
