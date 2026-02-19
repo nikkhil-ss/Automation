@@ -1,0 +1,6 @@
+# Naukri Auto Updater - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+selenium>=4.15.0
+schedule>=1.2.0
+chromedriver-autoinstaller>=0.6.0
