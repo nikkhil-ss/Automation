@@ -19,13 +19,16 @@ PROFILE_URL = "https://www.naukri.com/mnjuser/profile"
 
 
 def first_working(page, selectors: List[str]):
-    for selector in selectors:
-        try:
-            handle = page.locator(selector)
-            if handle.first.is_visible(timeout=2000):
-                return handle
-        except Exception:
-            continue
+    # Try on the main page and all frames; Naukri sometimes nests login inside an iframe.
+    contexts = [page] + list(page.frames)
+    for context in contexts:
+        for selector in selectors:
+            try:
+                handle = context.locator(selector).first
+                if handle.is_visible(timeout=3000):
+                    return handle
+            except Exception:
+                continue
     raise TimeoutError(f"None of the selectors matched: {selectors}")
 
 
@@ -38,18 +41,27 @@ def login(page, email: str, password: str):
         "input[type='email']",
         "input[placeholder*='Email']",
         "input[placeholder*='Username']",
+        "input[placeholder*='active Email']",
+        "input[aria-label*='Email']",
+        "input[id*='email']",
+        "input[id*='username']",
+        "input[name='username']",
     ]
     password_locators = [
         "#passwordField",
         "input[name='PASSWORD']",
         "input[type='password']",
         "input[placeholder*='Password']",
+        "input[aria-label*='Password']",
+        "input[id*='password']",
     ]
     login_button_locators = [
         "button[type='submit']",
         "button:has-text('Login')",
         "button:has-text('log in')",
         "#loginButton",
+        "button:has-text('Sign in')",
+        "button:has-text('submit')",
     ]
 
     first_working(page, email_locators).fill(email)
