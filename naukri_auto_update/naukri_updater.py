@@ -10,6 +10,7 @@ import time
 import random
 import logging
 import json
+import certifi
 from datetime import datetime
 import requests
 from requests.exceptions import RequestException
@@ -68,6 +69,7 @@ class NaukriUpdater:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
+        self.session.verify = certifi.where()  # Use certifi SSL certificates
         self.headline_index = 0
         self.auth_token = None
         
@@ -96,15 +98,30 @@ class NaukriUpdater:
             )
             self.random_delay(1, 2)
             
-            # Login payload
+            # Login payload - Naukri requires these specific fields
             login_data = {
                 "username": NAUKRI_EMAIL,
-                "password": NAUKRI_PASSWORD
+                "password": NAUKRI_PASSWORD,
+                "resFormat": "json"
+            }
+            
+            # Update headers for login request
+            login_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Content-Type": "application/json",
+                "Origin": "https://www.naukri.com",
+                "Referer": "https://www.naukri.com/nlogin/login",
+                "appid": "109",
+                "systemid": "Naukri",
+                "gid": "LOCATION,ENTITY,CLUSTER,COLLEGE,COURSE,BRANCH_NEW,INSTITUTE,COMPANY_GROUP,SALARY,SKILLS,DESIGNATION,DEPARTMENT,INDUSTRY,EDUCATION,EXPERIENCE,FRESHER,JOB_TYPE,SOURCE,FUNCTION,COMPANY_TYPE,COMPANY_SIZE,CERTIFICATION,CANDIDATE_SOURCE,JOB_LOCATION,JOB_ROLE"
             }
             
             response = self.session.post(
                 self.LOGIN_URL,
                 json=login_data,
+                headers=login_headers,
                 timeout=BROWSER_TIMEOUT
             )
             
@@ -130,6 +147,14 @@ class NaukriUpdater:
                     
             elif response.status_code == 401:
                 logger.error("Invalid credentials! Please check your email and password in config.py")
+                return False
+            elif response.status_code == 400:
+                logger.error("Bad request - validation error")
+                try:
+                    error_data = response.json()
+                    logger.error(f"Error details: {json.dumps(error_data, indent=2)}")
+                except:
+                    logger.error(f"Response: {response.text[:500]}")
                 return False
             elif response.status_code == 403:
                 logger.error("Access forbidden - account may be locked or CAPTCHA required")

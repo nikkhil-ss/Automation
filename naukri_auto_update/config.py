@@ -2,8 +2,8 @@
 # Update these values with your credentials
 
 # Naukri Login Credentials
-NAUKRI_EMAIL = "your_email@example.com"
-NAUKRI_PASSWORD = "your_password"
+NAUKRI_EMAIL = "nikhil7singh02@gmail.com"
+NAUKRI_PASSWORD = "SarcasmicAss@224"
 
 # Update Schedule (times in 24-hour format "HH:MM")
 # The app will update your profile at these times daily
@@ -16,7 +16,7 @@ UPDATE_HEADLINE = False  # Toggle headline update
 UPDATE_PROFILE_SUMMARY = False  # Toggle profile summary update
 
 # Resume file path (for Termux, use full path like /data/data/com.termux/files/home/resume.pdf)
-RESUME_PATH = "/data/data/com.termux/files/home/resume.pdf"
+RESUME_PATH = "C:/Users/nikhilsi/Desktop/Nikhil_Singh_Resume_2.pdf"
 
 # Alternate headlines to cycle through (if UPDATE_HEADLINE is True)
 HEADLINES = [
