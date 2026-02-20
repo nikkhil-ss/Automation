@@ -16,7 +16,7 @@ UPDATE_HEADLINE = False  # Toggle headline update
 UPDATE_PROFILE_SUMMARY = False  # Toggle profile summary update
 
 # Resume file path (for Termux, use full path like /data/data/com.termux/files/home/resume.pdf)
-RESUME_PATH = "C:/Users/nikhilsi/Desktop/Nikhil_Singh_Resume_2.pdf"
+RESUME_PATH = "data/data/com.termux/files/home/Nikhil_Singh_Resume_2.pdf"
 
 # Alternate headlines to cycle through (if UPDATE_HEADLINE is True)
 HEADLINES = [

@@ -254,6 +254,131 @@ class NaukriUpdater:
         except Exception as e:
             logger.error(f"Form-based login failed: {e}")
             return False
+    
+    def get_profile_info(self):
+        """Fetch and display profile information including name."""
+        logger.info("Fetching profile information...")
+        
+        try:
+            # Try the profile API
+            response = self.session.get(
+                self.PROFILE_API_URL,
+                headers={
+                    **self.HEADERS,
+                    "Accept": "application/json",
+                },
+                timeout=BROWSER_TIMEOUT,
+                verify=False
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Profile API response: {json.dumps(data, indent=2)[:500]}")
+                
+                # Extract name from profile
+                profile = data.get('profile', data)
+                name = profile.get('name', profile.get('fullName', profile.get('userName', 'Unknown')))
+                email = profile.get('email', profile.get('emailId', 'N/A'))
+                headline = profile.get('resumeHeadline', profile.get('headline', 'N/A'))
+                
+                logger.info(f"========== PROFILE INFO ==========")
+                logger.info(f"Name: {name}")
+                logger.info(f"Email: {email}")
+                logger.info(f"Headline: {headline}")
+                logger.info(f"===================================")
+                
+                return data
+            else:
+                logger.warning(f"Profile API returned status: {response.status_code}")
+                logger.info(f"Response: {response.text[:300]}")
+                
+                # Try alternate profile endpoint
+                alt_url = "https://www.naukri.com/central-profileservice/v1/me"
+                alt_response = self.session.get(alt_url, timeout=BROWSER_TIMEOUT, verify=False)
+                
+                if alt_response.status_code == 200:
+                    data = alt_response.json()
+                    logger.info(f"Alternate profile response: {json.dumps(data, indent=2)[:500]}")
+                    return data
+                    
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch profile info: {e}")
+            return None
+    
+    def update_salary(self, new_salary=900000):
+        """Update preferred salary in profile."""
+        logger.info(f"Updating preferred salary to {new_salary}...")
+        
+        try:
+            # First get current profile to understand structure
+            profile_data = self.get_profile_info()
+            
+            # Salary update endpoint
+            salary_url = "https://www.naukri.com/central-profileservice/v1/profile/expectedCtc"
+            
+            payload = {
+                "expectedCtc": str(new_salary),
+                "expectedCtcLakh": str(new_salary // 100000),
+                "salaryInLakh": new_salary // 100000,
+                "salaryInThousand": (new_salary % 100000) // 1000
+            }
+            
+            headers = {
+                **self.HEADERS,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            
+            response = self.session.put(
+                salary_url,
+                json=payload,
+                headers=headers,
+                timeout=BROWSER_TIMEOUT,
+                verify=False
+            )
+            
+            logger.info(f"Salary update response status: {response.status_code}")
+            logger.info(f"Response: {response.text[:300]}")
+            
+            if response.status_code in [200, 201, 204]:
+                logger.info(f"Successfully updated salary to {new_salary}!")
+                return True
+            
+            # Try alternate payload format
+            alt_payload = {
+                "expectedCtc": new_salary
+            }
+            
+            response = self.session.put(
+                salary_url,
+                json=alt_payload,
+                headers=headers,
+                timeout=BROWSER_TIMEOUT,
+                verify=False
+            )
+            
+            if response.status_code in [200, 201, 204]:
+                logger.info(f"Successfully updated salary to {new_salary} (alt format)!")
+                return True
+                
+            # Try POST instead of PUT
+            response = self.session.post(
+                salary_url,
+                json=alt_payload,
+                headers=headers,
+                timeout=BROWSER_TIMEOUT,
+                verify=False
+            )
+            
+            logger.info(f"Salary POST response: {response.status_code} - {response.text[:200]}")
+            
+            return response.status_code in [200, 201, 204]
+            
+        except Exception as e:
+            logger.error(f"Failed to update salary: {e}")
+            return False
             
     def update_resume(self):
         """Re-upload resume to increase profile visibility."""
@@ -407,7 +532,7 @@ class NaukriUpdater:
             logger.error(f"Profile touch failed: {e}")
             return False
             
-    def update_profile(self):
+    def update_profile(self, show_info=True, update_salary=None):
         """Main method to perform all profile updates."""
         logger.info("=" * 50)
         logger.info(f"Starting profile update at {datetime.now()}")
@@ -420,6 +545,16 @@ class NaukriUpdater:
                 return False
             
             self.random_delay(2, 4)
+            
+            # Show profile info if requested
+            if show_info:
+                self.get_profile_info()
+                self.random_delay(1, 2)
+            
+            # Update salary if specified
+            if update_salary is not None:
+                self.update_salary(update_salary)
+                self.random_delay(1, 2)
             
             success = True
             
@@ -461,7 +596,7 @@ class NaukriUpdater:
             logger.warning(f"Error closing session: {e}")
 
 
-def run_update_with_retry():
+def run_update_with_retry(show_info=True, update_salary=None):
     """Run the update process with retry logic."""
     
     for attempt in range(MAX_RETRIES):
@@ -469,7 +604,7 @@ def run_update_with_retry():
         try:
             logger.info(f"Update attempt {attempt + 1} of {MAX_RETRIES}")
             
-            if updater.update_profile():
+            if updater.update_profile(show_info=show_info, update_salary=update_salary):
                 logger.info("Profile update successful!")
                 return True
             else:
@@ -487,6 +622,26 @@ def run_update_with_retry():
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Naukri Profile Auto Updater")
+    parser.add_argument("--salary", type=int, help="Update salary to this amount (e.g., 900000)")
+    parser.add_argument("--no-info", action="store_true", help="Skip showing profile info")
+    parser.add_argument("--info-only", action="store_true", help="Only show profile info, no updates")
+    
+    args = parser.parse_args()
+    
     print("Naukri Profile Auto Updater")
     print("=" * 40)
-    run_update_with_retry()
+    
+    if args.info_only:
+        # Just login and show profile info
+        updater = NaukriUpdater()
+        if updater.login():
+            updater.get_profile_info()
+        updater.cleanup()
+    else:
+        run_update_with_retry(
+            show_info=not args.no_info, 
+            update_salary=args.salary
+        )
