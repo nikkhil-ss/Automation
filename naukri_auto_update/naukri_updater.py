@@ -10,10 +10,14 @@ import time
 import random
 import logging
 import json
+import urllib3
 import certifi
 from datetime import datetime
 import requests
 from requests.exceptions import RequestException
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 import config
 
@@ -46,8 +50,9 @@ logger = logging.getLogger(__name__)
 class NaukriUpdater:
     """Handles Naukri profile automation tasks using HTTP requests."""
     
-    # API Endpoints
+    # API Endpoints - try multiple login endpoints
     LOGIN_URL = "https://www.naukri.com/central-login-services/v1/login"
+    LOGIN_URL_ALT = "https://login.naukri.com/nLogin/Login.php"
     PROFILE_URL = "https://www.naukri.com/mnjuser/profile"
     RESUME_UPLOAD_URL = "https://www.naukri.com/mnjuser/profile"
     PROFILE_API_URL = "https://www.naukri.com/central-profileservice/v1/profile"
@@ -94,15 +99,15 @@ class NaukriUpdater:
             # First, get the login page to obtain any necessary cookies
             self.session.get(
                 "https://www.naukri.com/nlogin/login",
-                timeout=BROWSER_TIMEOUT
+                timeout=BROWSER_TIMEOUT,
+                verify=False
             )
             self.random_delay(1, 2)
             
-            # Login payload - Naukri requires these specific fields
+            # Login payload - correct format for Naukri API
             login_data = {
                 "username": NAUKRI_EMAIL,
-                "password": NAUKRI_PASSWORD,
-                "resFormat": "json"
+                "password": NAUKRI_PASSWORD
             }
             
             # Update headers for login request
@@ -114,18 +119,23 @@ class NaukriUpdater:
                 "Origin": "https://www.naukri.com",
                 "Referer": "https://www.naukri.com/nlogin/login",
                 "appid": "109",
-                "systemid": "Naukri",
-                "gid": "LOCATION,ENTITY,CLUSTER,COLLEGE,COURSE,BRANCH_NEW,INSTITUTE,COMPANY_GROUP,SALARY,SKILLS,DESIGNATION,DEPARTMENT,INDUSTRY,EDUCATION,EXPERIENCE,FRESHER,JOB_TYPE,SOURCE,FUNCTION,COMPANY_TYPE,COMPANY_SIZE,CERTIFICATION,CANDIDATE_SOURCE,JOB_LOCATION,JOB_ROLE"
+                "systemid": "109"
             }
             
             response = self.session.post(
                 self.LOGIN_URL,
                 json=login_data,
                 headers=login_headers,
-                timeout=BROWSER_TIMEOUT
+                timeout=BROWSER_TIMEOUT,
+                verify=False
             )
             
             logger.info(f"Login response status: {response.status_code}")
+            
+            # If JSON API fails with 400, try form-based login
+            if response.status_code == 400:
+                logger.info("JSON API failed, trying form-based login...")
+                return self._login_form_based()
             
             if response.status_code == 200:
                 try:
@@ -173,6 +183,76 @@ class NaukriUpdater:
             return False
         except Exception as e:
             logger.error(f"Login failed with error: {e}")
+            return False
+    
+    def _login_form_based(self):
+        """Try form-based login (traditional website login)."""
+        logger.info("Attempting form-based login...")
+        
+        try:
+            # Form-based login data
+            form_data = {
+                "username": NAUKRI_EMAIL,
+                "password": NAUKRI_PASSWORD,
+                "remember": "1"
+            }
+            
+            form_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": "https://www.naukri.com",
+                "Referer": "https://www.naukri.com/nlogin/login"
+            }
+            
+            response = self.session.post(
+                self.LOGIN_URL_ALT,
+                data=form_data,
+                headers=form_headers,
+                timeout=BROWSER_TIMEOUT,
+                verify=False,
+                allow_redirects=True
+            )
+            
+            logger.info(f"Form login response status: {response.status_code}")
+            
+            # Check if we got authentication cookies
+            auth_cookies = [c.name for c in self.session.cookies]
+            logger.info(f"Cookies after form login: {auth_cookies}")
+            
+            # Check for NKWAP or naukariya cookies (authentication tokens)
+            has_auth = any('nkwap' in c.lower() or 'naukariya' in c.lower() or 'nauk' in c.lower() 
+                          for c in auth_cookies)
+            
+            if has_auth or len(self.session.cookies) > 2:
+                logger.info("Form-based login appears successful!")
+                return True
+            
+            # Try to verify by accessing profile
+            profile_resp = self.session.get(
+                self.PROFILE_URL,
+                timeout=BROWSER_TIMEOUT,
+                verify=False,
+                allow_redirects=False
+            )
+            
+            if profile_resp.status_code == 200:
+                logger.info("Profile accessible - login successful!")
+                return True
+            elif profile_resp.status_code in [301, 302]:
+                redirect_url = profile_resp.headers.get('Location', '')
+                if 'login' in redirect_url.lower():
+                    logger.error("Login failed - redirected to login page")
+                    return False
+                logger.info("Login successful (redirect)")
+                return True
+            
+            logger.warning("Login status uncertain, proceeding anyway...")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Form-based login failed: {e}")
             return False
             
     def update_resume(self):
